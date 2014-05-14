@@ -1,0 +1,165 @@
+<html>
+<head>
+	<script src='http://code.jquery.com/jquery-1.10.2.min.js'></script>
+	<script src='socket.io.js'></script>
+	<script type='text/javascript'>
+		
+		var mediaConstraints = {"audio": true, "video": true};
+		var peerconnectionConfig = {"iceServers":[{"url":"turn:1.237.187.34:3478","credential":"1234","username":"test"}]};
+		
+		var socket = null;
+		var socketId = null;
+		var receiverId = null;
+		
+		var peerConnection = null;
+		var _localStream = null;		
+
+		var localVideo;
+		var remoteVideo;
+		
+		function connect() {
+			socket = io.connect('http://211.110.5.180:8070');
+			socket.on('open', function(data) {
+				socketId = data;
+				
+				console.log('my id : '+socketId);
+			
+				//getUserMedia를 호출한다.
+				initWebRTC();
+				
+				//signaling에 필요한 callback를 등록한다.
+				socket.on('signaling', function(message) {
+					var jsonData = JSON.parse(message.msg);
+					
+					if(jsonData.type == "offer") {
+						receiverId = message.sender;
+						
+						peerConnection.setRemoteDescription(new RTCSessionDescription(jsonData),
+							function() {
+							},
+							function() {
+							}
+						);
+						
+						peerConnection.createAnswer(
+							function(sdp) {
+								peerConnection.setLocalDescription(sdp,
+									function() {
+									},
+									function() {
+									}
+								);
+								sendMessage('signaling', JSON.stringify(sdp));
+							},
+							function(error) {
+								console.log('createOffer error, log:'+error);
+							}
+						);
+					}
+					else if(jsonData.type == "answer") {
+						peerConnection.setRemoteDescription(new RTCSessionDescription(jsonData),
+							function() {
+							},
+							function() {
+							}
+						);
+					}
+					else if(jsonData.type == "candidate") {
+						var candidate = new RTCIceCandidate({sdpMLineIndex: jsonData.label, candidate: jsonData.candidate});
+						peerConnection.addIceCandidate(candidate);
+					}
+					else if(jsonData.type.indexOf('bye')) {
+						stopWebRTC();
+					}
+				});
+				socket.on('calling', function(message) {
+					receiverId = message.partner;
+					
+					console.log('partner id : '+receiverId);
+					
+					peerConnection.createOffer(
+						function(sdp) {
+							peerConnection.setLocalDescription(sdp,
+								function() {
+								},
+								function() {
+								}
+							);
+							sendMessage('signaling', JSON.stringify(sdp));
+						},
+						function(error) {
+							console.log('createOffer error, log:'+error);
+						}
+					);
+				});
+			});
+			
+			localVideo = document.getElementById('local_video');
+			remoteVideo = document.getElementById('remote_video');
+		}
+		
+		function initWebRTC() {
+			navigator.webkitGetUserMedia(mediaConstraints, 
+				//getUserMedia success callback
+				function(stream){			
+					_localStream = stream;
+
+					//video element에 생성된 stream을 설정한다.
+					localVideo.src = URL.createObjectURL(stream);
+					
+					//생성된 stream을 바탕으로, RTCPeerConnection을 생성한다.
+					peerConnection = new webkitRTCPeerConnection(peerconnectionConfig);
+					peerConnection.addStream(stream);
+					
+					peerConnection.onicecandidate = function(event) {
+						if(event.candidate) {							
+							sendMessage('signaling', JSON.stringify({type: 'candidate',
+								label: event.candidate.sdpMLineIndex,
+								id: event.candidate.sdpMid,
+								candidate: event.candidate.candidate}));
+						}
+					}
+					peerConnection.onaddstream = function(event) {
+						remoteVideo.src = URL.createObjectURL(event.stream);
+					}
+				},
+				// getUserMedia error callback
+				function(error) {
+					console.log('getUserMedia error ['+error.name+"]");
+				}
+			);
+		}
+		
+		function startWebRTC() {
+			sendMessage('calling', "");
+		}
+		
+		function stopWebRTC() {
+			if(_localStream)
+				_localStream.stop();
+
+			if(peerConnection)
+				peerConnection.close();
+
+			sendMessage('signaling', JSON.stringify({type:'bye'}));
+		}
+		
+		function sendMessage(type, message) {
+			if(socket) {
+				socket.emit(type, {sender:socketId, receiver:receiverId, msg:message});
+			}
+		}
+	</script>
+</head>
+<body>
+	<div>
+	<video id='local_video' autoplay></video>
+	<video id='remote_video' autoplay></video>
+	</div>
+	<div>
+	<input type='button' value='Connect' onclick='connect();'/>
+	<input type='button' value='Call' onclick='startWebRTC();'/>
+	<input type='button' value='HangUp' onclick='stopWebRTC();'/>
+	</div>
+</body>
+</html>
